@@ -1,0 +1,139 @@
+// ========================================================
+// Bangladesh NO2 Yearly Analysis (2018–2025)
+// Dataset: Sentinel-5P NO2 (OFFL + NRTI)
+// Author: BIBI HAZERA
+// ========================================================
+
+// 1) Bangladesh Boundary
+var bangladesh = ee.FeatureCollection("FAO/GAUL/2015/level0")
+                    .filter(ee.Filter.eq("ADM0_NAME", "Bangladesh"))
+                    .geometry();
+
+Map.centerObject(bangladesh, 7);
+
+// 2) Year List
+var years = ee.List.sequence(2018, 2025);
+
+// ========================================================
+// 3) Compute Yearly Mean (OFFL NO2 Dataset)
+// ========================================================
+
+var yearlyImages = years.map(function(year) {
+
+  var start = ee.Date.fromYMD(year, 1, 1);
+  var end   = ee.Date.fromYMD(year, 12, 31);
+
+  var coll = ee.ImageCollection("COPERNICUS/S5P/OFFL/L3_NO2")
+                 .filterBounds(bangladesh)
+                 .filterDate(start, end)
+                 .select("NO2_column_number_density");
+
+  var meanImg = coll.mean()
+        .set("year", year)
+        .set("system:time_start", start.millis());
+
+  return meanImg;
+});
+
+var NO2_yearly = ee.ImageCollection.fromImages(yearlyImages);
+print("Yearly NO2 Image Collection:", NO2_yearly);
+
+// ========================================================
+// 4) Map Visualisation
+// ========================================================
+
+var vis = {
+  min: 0,
+  max: 0.0002,
+  palette: ['black','blue','purple','cyan','green','yellow','red']
+};
+
+years.evaluate(function(list){
+  list.forEach(function(year){
+    var img = NO2_yearly.filter(ee.Filter.eq("year", year)).first();
+    Map.addLayer(img.clip(bangladesh), vis, "NO2 " + year);
+  });
+});
+
+// ========================================================
+// 5) CSV Export (Mean NO2 per Year)
+// ========================================================
+
+var featureList = years.map(function(year){
+
+  var img = NO2_yearly.filter(ee.Filter.eq("year", year)).first();
+
+  var stats = img.reduceRegion({
+    reducer: ee.Reducer.mean(),
+    geometry: bangladesh,
+    scale: 1113.2, 
+    maxPixels: 1e13
+  });
+
+  return ee.Feature(null, {
+    'year': year,
+    'NO2_mean': stats.get('NO2_column_number_density')
+  });
+});
+
+var NO2_table = ee.FeatureCollection(featureList);
+print("NO2 Yearly Mean Table:", NO2_table);
+
+// Export CSV
+Export.table.toDrive({
+  collection: NO2_table,
+  description: 'Bangladesh_NO2_Yearly_2018_2025',
+  fileFormat: 'CSV'
+});
+
+// ========================================================
+// 6) Time-Series Chart
+// ========================================================
+
+var chart = ui.Chart.image.series({
+    imageCollection: NO2_yearly,
+    region: bangladesh,
+    reducer: ee.Reducer.mean(),
+    scale: 1113.2
+  })
+  .setOptions({
+    title: "Bangladesh Yearly NO2 Concentration (2018–2025)",
+    hAxis: {title: "Year"},
+    vAxis: {title: "NO2 Column Density (mol/m²)"},
+    lineWidth: 2,
+    pointSize: 6
+  });
+
+print(chart);
+
+// ========================================================
+// 7) GeoTIFF Export — NRTI NO2 Dataset
+// ========================================================
+
+years.evaluate(function(yearList) {
+  yearList.forEach(function(year) {
+
+    var start = ee.Date.fromYMD(year, 1, 1);
+    var end   = ee.Date.fromYMD(year, 12, 31);
+
+    var coll = ee.ImageCollection("COPERNICUS/S5P/NRTI/L3_NO2")
+                   .filterBounds(bangladesh)
+                   .filterDate(start, end)
+                   .select("NO2_column_number_density");
+
+    var meanImg = coll.mean().clip(bangladesh);
+
+    Export.image.toDrive({
+      image: meanImg,
+      description: 'Bangladesh_NO2_' + year,
+      folder: 'Bangladesh_NO2_TIFF',
+      fileNamePrefix: 'NO2_' + year,
+      region: bangladesh,
+      scale: 1113.2,
+      maxPixels: 1e13,
+      fileFormat: 'GeoTIFF'
+    });
+
+    print("Export started for year:", year);
+  });
+});
